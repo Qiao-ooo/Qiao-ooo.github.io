@@ -173,6 +173,22 @@
             <button class="primary-button" data-jump="scores">去评分榜选股</button>
           </div>
           <div class="stock-list full-list" id="watchlistStocks"></div>
+          <section class="section-block learning-card">
+            <div class="section-heading compact">
+              <div>
+                <p class="eyebrow">FORECAST REVIEW</p>
+                <h2>预测复盘 · 自动学习</h2>
+              </div>
+              <button class="text-button" id="verifyPredictions">更新验证</button>
+            </div>
+            <p class="learning-copy">冻结前一交易日的预测，下一交易日用实际收盘涨跌验证；积累足够样本后自动校准后续概率。</p>
+            <div class="learning-metrics" id="learningMetrics"></div>
+            <div class="learning-empty" id="learningEmpty">
+              <strong>正在积累第一批预测</strong>
+              <span>打开自选股详情即可记录当日预测，下一交易日再回来验证。</span>
+            </div>
+            <div class="prediction-history" id="predictionHistory"></div>
+          </section>
         </section>
 
         <section class="tab-panel" data-panel="settings">
