@@ -23,6 +23,10 @@ const state = {
   scored: [],
   weights: loadJson("zt-workbench-weights", DEFAULT_WEIGHTS),
   watchlist: new Set(loadJson("zt-workbench-watchlist", [])),
+  watchMeta: loadJson("zt-workbench-watch-meta", {}),
+  watchQuotes: {},
+  watchSearchResults: [],
+  watchSearchRequest: 0,
   scoreFilter: "all",
   search: "",
 };
@@ -106,7 +110,30 @@ function stockCard(stock, index) {
         <div class="stock-meta"><span class="tag">${escapeHtml(stock.sector)}</span>${stock.streak > 1 ? `<span class="tag streak">${stock.streak}连板</span>` : ""}<span class="tag">封板 ${formatTime(stock.firstLimitTime)}</span></div>
       </div>
       <div class="score-block"><strong>${Math.round(stock.score)}</strong><span>强度值</span></div>
-      <button class="watch-button ${saved ? "saved" : ""}" data-watch="${stock.code}" aria-label="${saved ? "移出" : "加入"}观察">${saved ? "★" : "☆"}</button>
+      <button class="watch-button ${saved ? "saved" : ""}" data-watch="${stock.code}" aria-label="${saved ? "移出" : "加入"}自选">${saved ? "★" : "☆"}</button>
+    </article>`;
+}
+
+function watchMetaFor(code) {
+  const scored = state.scored.find((stock) => stock.code === code);
+  if (scored) return { code: scored.code, name: scored.name, market: scored.market, marketName: scored.sector };
+  return state.watchMeta[code] ?? null;
+}
+
+function watchlistCard(meta, index) {
+  const quote = state.watchQuotes[meta.code];
+  const price = Number(quote?.price);
+  const change = Number(quote?.changePercent);
+  const hasQuote = Number.isFinite(price) && price > 0;
+  return `
+    <article class="stock-card self-stock" data-stock="${meta.code}" role="button" tabindex="0">
+      <span class="rank-number">${String(index + 1).padStart(2, "0")}</span>
+      <div class="stock-main">
+        <div class="stock-title"><strong>${escapeHtml(quote?.name || meta.name || meta.code)}</strong><span class="stock-code">${meta.code}</span></div>
+        <div class="stock-meta"><span class="tag">${escapeHtml(meta.marketName || (Number(meta.market) === 1 ? "沪A" : "深A"))}</span><span class="tag">点击查看 K 线</span></div>
+      </div>
+      <div class="quote-block"><strong>${hasQuote ? `¥${price.toFixed(2)}` : "载入中"}</strong><span class="${change >= 0 ? "rise" : "fall"}">${Number.isFinite(change) ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "联网行情"}</span></div>
+      <button class="watch-button saved" data-watch="${meta.code}" aria-label="移出自选">★</button>
     </article>`;
 }
 
@@ -175,8 +202,94 @@ function renderSectors() {
 
 function renderWatchlist() {
   const watched = state.scored.filter((stock) => state.watchlist.has(stock.code));
-  $("#watchlistEmpty").hidden = watched.length > 0;
-  $("#watchlistStocks").innerHTML = watched.map(stockCard).join("");
+  const scoredCodes = new Set(watched.map((stock) => stock.code));
+  const custom = [...state.watchlist]
+    .filter((code) => !scoredCodes.has(code))
+    .map(watchMetaFor)
+    .filter(Boolean);
+  const total = watched.length + custom.length;
+  $("#watchlistSummary").textContent = `共 ${state.watchlist.size} 只自选 · 点股票查看走势`;
+  $("#watchlistEmpty").hidden = state.watchlist.size > 0;
+  $("#watchlistStocks").innerHTML = [
+    ...watched.map(stockCard),
+    ...custom.map((meta, index) => watchlistCard(meta, watched.length + index)),
+  ].join("");
+  if (state.watchlist.size > 0 && total === 0) {
+    $("#watchlistStocks").innerHTML = `<div class="empty-state compact-empty"><span>↻</span><h3>正在恢复自选信息</h3><p>请联网后重新搜索添加。</p></div>`;
+  }
+}
+
+function saveWatchlist() {
+  localStorage.setItem("zt-workbench-watchlist", JSON.stringify([...state.watchlist]));
+  localStorage.setItem("zt-workbench-watch-meta", JSON.stringify(state.watchMeta));
+}
+
+function renderWatchSearchResults() {
+  const container = $("#watchlistSearchResults");
+  container.innerHTML = state.watchSearchResults.map((item) => {
+    const saved = state.watchlist.has(item.code);
+    return `<div class="watch-search-row"><div><strong>${escapeHtml(item.name)}</strong><span>${item.code} · ${escapeHtml(item.marketName)}</span></div><button data-add-watch="${item.code}" ${saved ? "disabled" : ""}>${saved ? "已添加" : "＋"}</button></div>`;
+  }).join("");
+}
+
+async function searchWatchStocks(query) {
+  const keyword = query.trim();
+  const hint = $("#watchlistSearchHint");
+  const requestId = ++state.watchSearchRequest;
+  if (!keyword) {
+    state.watchSearchResults = [];
+    renderWatchSearchResults();
+    hint.textContent = "支持沪深京 A 股，联网搜索后点“＋”添加";
+    return;
+  }
+  hint.textContent = "正在联网搜索…";
+  try {
+    const response = await jsonp(`https://searchapi.eastmoney.com/api/suggest/get?input=${encodeURIComponent(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=8`, 12000);
+    if (requestId !== state.watchSearchRequest) return;
+    const rows = response?.QuotationCodeTable?.Data ?? [];
+    state.watchSearchResults = rows
+      .filter((row) => row.Classify === "AStock" && /^\d{6}$/.test(row.Code))
+      .map((row) => ({
+        code: row.Code,
+        name: row.Name,
+        market: Number(String(row.QuoteID || "0.0").split(".")[0]),
+        marketName: row.SecurityTypeName || "A股",
+      }));
+    hint.textContent = state.watchSearchResults.length ? `找到 ${state.watchSearchResults.length} 只股票` : "没有找到匹配的 A 股，请检查代码或名称";
+    renderWatchSearchResults();
+  } catch (error) {
+    if (requestId !== state.watchSearchRequest) return;
+    state.watchSearchResults = [];
+    renderWatchSearchResults();
+    hint.textContent = navigator.onLine ? "搜索暂时失败，请稍后重试" : "当前离线，联网后可搜索添加";
+  }
+}
+
+function addWatchFromSearch(code) {
+  const item = state.watchSearchResults.find((row) => row.code === code);
+  if (!item) return;
+  state.watchlist.add(code);
+  state.watchMeta[code] = item;
+  saveWatchlist();
+  renderFeatured();
+  renderScores();
+  renderWatchlist();
+  renderWatchSearchResults();
+  refreshWatchQuotes([code]);
+  showToast(`${item.name} 已加入自选`);
+}
+
+async function refreshWatchQuotes(codes = [...state.watchlist]) {
+  const targets = codes.filter((code) => !state.scored.some((stock) => stock.code === code) && watchMetaFor(code));
+  if (!targets.length || !navigator.onLine) return;
+  await Promise.allSettled(targets.map(async (code) => {
+    const meta = watchMetaFor(code);
+    const response = await jsonp(`https://push2.eastmoney.com/api/qt/stock/get?secid=${meta.market}.${code}&fltt=2&invt=2&fields=f43,f57,f58,f60,f169,f170`, 12000);
+    const quote = response?.data;
+    if (!quote) return;
+    state.watchQuotes[code] = { name: quote.f58 || meta.name, price: Number(quote.f43), changePercent: Number(quote.f170) };
+  }));
+  renderWatchlist();
 }
 
 function renderWeights() {
@@ -199,11 +312,41 @@ function renderAll() {
 }
 
 function openStock(code) {
-  const stock = state.scored.find((item) => item.code === code);
+  const scoredStock = state.scored.find((item) => item.code === code);
+  const meta = watchMetaFor(code);
+  const quote = state.watchQuotes[code];
+  const stock = scoredStock ?? (meta ? {
+    ...meta,
+    isCustomWatch: true,
+    price: Number(quote?.price || 0),
+    changePercent: Number(quote?.changePercent || 0),
+    sector: meta.marketName || "自选股",
+  } : null);
   if (!stock) return;
   $("#stockSheet").dataset.stockCode = stock.code;
-  const netBuy = stock.billboard ? formatMoney(stock.billboard.netBuy, true) : "未上榜";
-  $("#stockSheetContent").innerHTML = `
+  if (stock.isCustomWatch) {
+    const priceText = stock.price > 0 ? `¥${stock.price.toFixed(2)}` : "联网载入";
+    const changeText = Number.isFinite(stock.changePercent) ? `${stock.changePercent >= 0 ? "+" : ""}${stock.changePercent.toFixed(2)}%` : "—";
+    $("#stockSheetContent").innerHTML = `
+      <div class="sheet-stock-head">
+        <div><p>${stock.code} · ${escapeHtml(stock.sector)}</p><h2>${escapeHtml(stock.name)}</h2><p>自选股 · 最新 ${priceText}</p></div>
+        <div class="sheet-score quote-score"><strong class="${stock.changePercent >= 0 ? "rise" : "fall"}">${changeText}</strong><span>最新涨跌幅</span></div>
+      </div>
+      <section class="trend-card">
+        <div class="trend-heading">
+          <div><span>PRICE ACTION</span><h3>个股走势 · 日K</h3></div>
+          <span class="trend-source">联网行情</span>
+        </div>
+        <div class="kline-loading" id="klineChart"><span></span><p>正在载入近 260 个交易日走势</p></div>
+        <div id="trendStats"></div>
+        <div class="probability-card loading" id="nextDayProbability">
+          <span>次日上涨历史参考率</span><strong>计算中</strong><p>基于该股票历史同类涨停样本</p>
+        </div>
+      </section>
+      <p class="sheet-disclaimer">自选股行情与历史统计仅用于短线复盘，不构成投资建议，也不代表下一交易日一定上涨。</p>`;
+  } else {
+    const netBuy = stock.billboard ? formatMoney(stock.billboard.netBuy, true) : "未上榜";
+    $("#stockSheetContent").innerHTML = `
     <div class="sheet-stock-head">
       <div><p>${stock.code} · ${escapeHtml(stock.sector)}</p><h2>${escapeHtml(stock.name)}</h2><p>${stock.streak} 连板 · 收盘 ¥${stock.price.toFixed(2)}</p></div>
       <div class="sheet-score"><strong>${Math.round(stock.score)}</strong><span>涨停强度值</span></div>
@@ -230,6 +373,7 @@ function openStock(code) {
     <div class="factor-list">${Object.entries(stock.factors).map(([key, value]) => `
       <div class="factor-row"><label>${FACTOR_LABELS[key]}</label><div class="bar-track"><div class="bar-fill" style="width:${value}%"></div></div><strong>${Math.round(value)}</strong></div>`).join("")}</div>
     <p class="sheet-disclaimer">强度值依据当日收盘后的七类数据计算，仅用于横向比较涨停结构，不表达次日方向或收益承诺。</p>`;
+  }
   openSheet($("#stockSheet"));
   loadStockTrend(stock);
 }
@@ -379,17 +523,28 @@ function closeSheets() {
 }
 
 function toggleWatch(code) {
-  state.watchlist.has(code) ? state.watchlist.delete(code) : state.watchlist.add(code);
-  localStorage.setItem("zt-workbench-watchlist", JSON.stringify([...state.watchlist]));
+  const wasSaved = state.watchlist.has(code);
+  if (wasSaved) {
+    state.watchlist.delete(code);
+    delete state.watchMeta[code];
+    delete state.watchQuotes[code];
+  } else {
+    state.watchlist.add(code);
+    const stock = state.scored.find((item) => item.code === code);
+    if (stock) state.watchMeta[code] = { code: stock.code, name: stock.name, market: stock.market, marketName: stock.sector };
+  }
+  saveWatchlist();
   renderFeatured();
   renderScores();
   renderWatchlist();
-  showToast(state.watchlist.has(code) ? "已加入我的观察" : "已移出我的观察");
+  renderWatchSearchResults();
+  showToast(state.watchlist.has(code) ? "已加入我的自选" : "已移出我的自选");
 }
 
 function switchTab(tab) {
   $$(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === tab));
   $$(".nav-item").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
+  if (tab === "watchlist") refreshWatchQuotes();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -543,6 +698,11 @@ function bindEvents() {
   $("#shareButton").addEventListener("click", shareApp);
   $("#refreshButton").addEventListener("click", () => refreshLive());
   $("#stockSearch").addEventListener("input", (event) => { state.search = event.target.value; renderScores(); });
+  let watchSearchTimer;
+  $("#watchlistSearch").addEventListener("input", (event) => {
+    clearTimeout(watchSearchTimer);
+    watchSearchTimer = setTimeout(() => searchWatchStocks(event.target.value), 280);
+  });
   $("#scoreFilters").addEventListener("click", (event) => {
     const button = event.target.closest("[data-score-filter]");
     if (!button) return;
@@ -551,6 +711,8 @@ function bindEvents() {
     renderScores();
   });
   document.addEventListener("click", (event) => {
+    const addWatch = event.target.closest("[data-add-watch]");
+    if (addWatch) { event.stopPropagation(); addWatchFromSearch(addWatch.dataset.addWatch); return; }
     const watch = event.target.closest("[data-watch]");
     if (watch) { event.stopPropagation(); toggleWatch(watch.dataset.watch); return; }
     const card = event.target.closest("[data-stock]");
