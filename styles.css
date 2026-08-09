@@ -149,6 +149,26 @@ main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
 .watchlist-summary { margin: 0 19px 11px; color: var(--muted); font-size: 11px; }
 .compact-empty { margin-inline: 0; padding-block: 28px; }
 .quote-score strong { font-size: 23px; letter-spacing: -.03em; }
+.learning-card { padding: 17px; border: 1px solid rgba(109,135,255,.18); border-radius: var(--radius); background: linear-gradient(145deg, rgba(109,135,255,.08), var(--surface)); }
+.learning-copy { margin: -2px 0 14px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.learning-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.learning-metrics > div { min-width: 0; padding: 10px 6px; border-radius: 11px; background: rgba(0,0,0,.16); text-align: center; }
+.learning-metrics span, .learning-metrics em { display: block; overflow: hidden; color: var(--muted-2); font-size: 7px; font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
+.learning-metrics strong { display: block; margin: 5px 0 3px; font-size: 14px; }
+.learning-empty { margin-top: 11px; padding: 14px; border: 1px dashed rgba(255,255,255,.1); border-radius: 13px; text-align: center; }
+.learning-empty strong, .learning-empty span { display: block; }
+.learning-empty strong { font-size: 11px; }
+.learning-empty span { margin-top: 5px; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.prediction-history { display: grid; gap: 7px; margin-top: 11px; }
+.prediction-row { display: grid; grid-template-columns: minmax(0,1.25fr) .8fr .8fr auto; align-items: center; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(0,0,0,.14); }
+.prediction-row.pending { grid-template-columns: minmax(0,1.25fr) .9fr auto; }
+.prediction-row div { min-width: 0; }
+.prediction-row div > strong, .prediction-row div > span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.prediction-row div > strong { font-size: 10px; }
+.prediction-row div > span { margin-top: 3px; color: var(--muted-2); font-size: 7px; }
+.prediction-row > em { padding: 4px 6px; border-radius: 999px; background: rgba(255,217,61,.08); color: var(--gold); font-size: 7px; font-style: normal; }
+.prediction-row > em.correct { background: rgba(255,93,118,.1); color: var(--red); }
+.prediction-row > em.wrong { background: rgba(71,229,168,.1); color: var(--green); }
 
 .sector-list { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .sector-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 14px; border-bottom: 1px solid var(--line); }
@@ -253,6 +273,11 @@ input[type="range"]::-webkit-slider-thumb { width: 18px; height: 18px; appearanc
 .probability-card > p { margin: 11px 0 0; color: var(--muted-2); font-size: 8px; line-height: 1.5; }
 .probability-range { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 8px; }
 .probability-range em { color: #bfc0cf; font-style: normal; }
+.learning-calibration { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; padding: 8px 9px; border-radius: 9px; background: rgba(255,255,255,.035); }
+.learning-calibration span { flex: 0 0 auto; color: var(--muted); font-size: 8px; }
+.learning-calibration strong { color: #c8cad8; font-size: 8px; font-weight: 600; text-align: right; }
+.learning-calibration.active { background: rgba(71,229,168,.07); }
+.learning-calibration.active span { color: var(--green); }
 .indicator-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 11px; }
 .indicator-grid > div { min-width: 0; padding: 9px; border: 1px solid rgba(255,255,255,.045); border-radius: 10px; background: rgba(0,0,0,.17); }
 .indicator-grid span, .indicator-grid em { display: block; color: var(--muted-2); font-size: 8px; font-style: normal; }
