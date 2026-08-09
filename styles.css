@@ -113,6 +113,9 @@ main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
 .score-block { width: 51px; text-align: center; }
 .score-block strong { display: block; color: var(--gold); font-size: 21px; letter-spacing: -.04em; }
 .score-block span { color: var(--muted-2); font-size: 9px; }
+.quote-block { min-width: 67px; padding-right: 7px; text-align: right; }
+.quote-block strong { display: block; color: var(--text); font-size: 14px; }
+.quote-block span { display: block; margin-top: 4px; font-size: 10px; font-weight: 750; }
 .watch-button { position: absolute; top: 5px; right: 5px; width: 25px; height: 25px; padding: 0; border: 0; background: transparent; color: #66697a; font-size: 16px; line-height: 1; }
 .watch-button.saved { color: var(--gold); }
 .full-list { margin: 0 18px; }
@@ -133,6 +136,19 @@ main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
 .chip { flex: 0 0 auto; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 700; }
 .chip.active { border-color: var(--gold); background: var(--gold); color: #11121a; }
 .rank-summary { margin: 3px 19px 11px; color: var(--muted); font-size: 11px; }
+
+.watchlist-add-card { margin: 0 18px 14px; padding: 14px; border: 1px solid rgba(255,217,61,.14); border-radius: 20px; background: linear-gradient(145deg, rgba(255,217,61,.07), var(--surface)); }
+.watchlist-search-hint { min-height: 16px; margin: 9px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.watchlist-search-results { display: grid; gap: 7px; margin-top: 9px; }
+.watch-search-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 14px; background: rgba(9,10,18,.45); }
+.watch-search-row strong, .watch-search-row span { display: block; }
+.watch-search-row strong { font-size: 13px; }
+.watch-search-row span { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.watch-search-row button { display: grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 11px; background: var(--gold); color: #11121a; font-size: 20px; font-weight: 850; }
+.watch-search-row button:disabled { width: auto; padding: 0 10px; background: rgba(255,255,255,.07); color: var(--muted); font-size: 10px; }
+.watchlist-summary { margin: 0 19px 11px; color: var(--muted); font-size: 11px; }
+.compact-empty { margin-inline: 0; padding-block: 28px; }
+.quote-score strong { font-size: 23px; letter-spacing: -.03em; }
 
 .sector-list { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .sector-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 14px; border-bottom: 1px solid var(--line); }
