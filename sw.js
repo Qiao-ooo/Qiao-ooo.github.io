@@ -1,4 +1,4 @@
-const CACHE_NAME = "zt-workbench-v3";
+const CACHE_NAME = "zt-workbench-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
