@@ -18,6 +18,8 @@ const FACTOR_LABELS = {
   sentiment: "市场情绪",
 };
 
+const PREDICTION_KEY = "zt-workbench-predictions-v1";
+
 const state = {
   data: null,
   scored: [],
@@ -27,6 +29,7 @@ const state = {
   watchQuotes: {},
   watchSearchResults: [],
   watchSearchRequest: 0,
+  predictions: loadJson(PREDICTION_KEY, []),
   scoreFilter: "all",
   search: "",
 };
@@ -219,6 +222,128 @@ function renderWatchlist() {
   }
 }
 
+function savePredictions() {
+  state.predictions = state.predictions.slice(-500);
+  localStorage.setItem(PREDICTION_KEY, JSON.stringify(state.predictions));
+}
+
+function calibrateProbability(baseProbability, current) {
+  const verified = state.predictions.filter((record) => record.verified && Number.isFinite(record.finalProbability));
+  const sameBucket = verified.filter((record) => Math.abs(record.rawProbability - baseProbability) <= 10);
+  const sameRegime = sameBucket.filter((record) =>
+    Math.sign(record.features?.mainRatio || 0) === Math.sign(current.mainRatio || 0)
+    && Math.sign(record.features?.macdHistogramPercent || 0) === Math.sign(current.macdHistogramPercent || 0));
+  const pool = sameRegime.length >= 5 ? sameRegime : sameBucket;
+  if (pool.length < 5) return { adjusted: baseProbability, learned: false, sampleCount: pool.length, delta: 0 };
+  const wins = pool.filter((record) => record.actualUp).length;
+  const priorStrength = 10;
+  const adjusted = ((wins + priorStrength * (baseProbability / 100)) / (pool.length + priorStrength)) * 100;
+  return { adjusted: clamp(adjusted, 5, 95), learned: true, sampleCount: pool.length, delta: adjusted - baseProbability };
+}
+
+function canFreezePrediction(signalDate) {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  if (signalDate < today) return true;
+  return signalDate === today && (now.getHours() * 60 + now.getMinutes()) >= 905;
+}
+
+function recordPrediction(stock, probability, calibration, data) {
+  const signalDate = probability.current?.date;
+  if (!signalDate || signalDate !== data.at(-1)?.date || !canFreezePrediction(signalDate)) return;
+  if (state.predictions.some((record) => record.code === stock.code && record.signalDate === signalDate)) return;
+  state.predictions.push({
+    id: `${stock.code}-${signalDate}`,
+    code: stock.code,
+    market: Number(stock.market),
+    name: stock.name,
+    signalDate,
+    signalClose: data.at(-1).close,
+    rawProbability: probability.rate,
+    finalProbability: calibration.adjusted,
+    analogSamples: probability.count,
+    learningSamples: calibration.sampleCount,
+    features: {
+      volumeRatio: probability.current.volumeRatio,
+      mainRatio: probability.current.mainRatio,
+      macdHistogramPercent: probability.current.macdHistogramPercent,
+      rsi6: probability.current.rsi6,
+      momentum5: probability.current.momentum5,
+    },
+    modelVersion: "hard-indicator-learning-v1",
+    createdAt: new Date().toISOString(),
+    verified: false,
+  });
+  savePredictions();
+  renderLearningPanel();
+}
+
+function verifyPredictionRecords(code, data) {
+  let changed = 0;
+  state.predictions.forEach((record) => {
+    if (record.code !== code || record.verified) return;
+    const index = data.findIndex((item) => item.date === record.signalDate);
+    if (index < 0 || index >= data.length - 1) return;
+    const next = data[index + 1];
+    const baseClose = data[index].close;
+    record.actualDate = next.date;
+    record.actualReturn = ((next.close / baseClose) - 1) * 100;
+    record.actualUp = record.actualReturn > 0;
+    record.correct = (record.finalProbability >= 50) === record.actualUp;
+    record.brier = ((record.finalProbability / 100) - (record.actualUp ? 1 : 0)) ** 2;
+    record.verified = true;
+    record.verifiedAt = new Date().toISOString();
+    changed += 1;
+  });
+  if (changed) {
+    savePredictions();
+    renderLearningPanel();
+  }
+  return changed;
+}
+
+function renderLearningPanel() {
+  const metrics = $("#learningMetrics");
+  if (!metrics) return;
+  const records = [...state.predictions].sort((a, b) => String(b.signalDate).localeCompare(String(a.signalDate)));
+  const verified = records.filter((record) => record.verified);
+  const correct = verified.filter((record) => record.correct).length;
+  const hitRate = verified.length ? (correct / verified.length) * 100 : null;
+  const brier = verified.length ? verified.reduce((sum, record) => sum + Number(record.brier || 0), 0) / verified.length : null;
+  metrics.innerHTML = `
+    <div><span>已验证</span><strong>${verified.length}</strong><em>条预测</em></div>
+    <div><span>方向命中</span><strong>${hitRate == null ? "—" : `${hitRate.toFixed(1)}%`}</strong><em>以 50% 为界</em></div>
+    <div><span>Brier 误差</span><strong>${brier == null ? "—" : brier.toFixed(3)}</strong><em>越低越好</em></div>
+    <div><span>校准状态</span><strong>${verified.length >= 5 ? "学习中" : "积累中"}</strong><em>${verified.length >= 5 ? "概率校准已启用" : `${5 - verified.length} 条后启动`}</em></div>`;
+  $("#learningEmpty").hidden = records.length > 0;
+  $("#predictionHistory").innerHTML = records.slice(0, 8).map((record) => {
+    const probability = Number(record.finalProbability).toFixed(1);
+    if (!record.verified) return `<div class="prediction-row pending"><div><strong>${escapeHtml(record.name)}</strong><span>${record.signalDate.slice(5)} 预测</span></div><div><span>次日上涨率</span><strong>${probability}%</strong></div><em>待验证</em></div>`;
+    const actualClass = record.actualReturn >= 0 ? "rise" : "fall";
+    return `<div class="prediction-row"><div><strong>${escapeHtml(record.name)}</strong><span>${record.signalDate.slice(5)} → ${record.actualDate.slice(5)}</span></div><div><span>前日预测</span><strong>${probability}%</strong></div><div><span>当日实际</span><strong class="${actualClass}">${record.actualReturn >= 0 ? "+" : ""}${record.actualReturn.toFixed(2)}%</strong></div><em class="${record.correct ? "correct" : "wrong"}">${record.correct ? "命中" : "偏差"}</em></div>`;
+  }).join("");
+}
+
+async function verifyAllPredictions({ silent = false } = {}) {
+  const button = $("#verifyPredictions");
+  const unresolved = state.predictions.filter((record) => !record.verified);
+  const targets = [...new Map(unresolved.map((record) => [record.code, record])).values()].slice(0, 20);
+  if (!targets.length) { if (!silent) showToast("暂无待验证预测"); return; }
+  if (!navigator.onLine) { if (!silent) showToast("当前离线，联网后才能验证"); return; }
+  const before = state.predictions.filter((record) => record.verified).length;
+  button.disabled = true;
+  button.textContent = "验证中…";
+  await Promise.allSettled(targets.map(async (record) => {
+    const response = await jsonp(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${record.market}.${record.code}&klt=101&fqt=1&lmt=260&end=20500101&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61`, 16000);
+    verifyPredictionRecords(record.code, parseKlines(response));
+  }));
+  const added = state.predictions.filter((record) => record.verified).length - before;
+  button.disabled = false;
+  button.textContent = "更新验证";
+  renderLearningPanel();
+  if (!silent || added) showToast(added ? `已完成 ${added} 条预测验证` : "尚无新的交易日结果");
+}
+
 function saveWatchlist() {
   localStorage.setItem("zt-workbench-watchlist", JSON.stringify([...state.watchlist]));
   localStorage.setItem("zt-workbench-watch-meta", JSON.stringify(state.watchMeta));
@@ -308,6 +433,7 @@ function renderAll() {
   renderScores();
   renderSectors();
   renderWatchlist();
+  renderLearningPanel();
   renderWeights();
 }
 
@@ -580,6 +706,7 @@ async function loadStockTrend(stock) {
     if (sheet.dataset.stockCode !== stock.code) return;
     const data = parseKlines(klineResult.value);
     if (data.length < 20) throw new Error("历史行情样本不足");
+    verifyPredictionRecords(stock.code, data);
     $("#klineChart").className = "kline-chart";
     $("#klineChart").innerHTML = renderKlineChart(data);
     const latest = data.at(-1);
@@ -597,10 +724,16 @@ async function loadStockTrend(stock) {
     const probability = indicatorProbabilityFromHistory(data, parseMainFlows(flowResult.value));
     if (probability.count >= 12 && probability.current) {
       const current = probability.current;
+      const calibration = calibrateProbability(probability.rate, current);
+      const displayedProbability = calibration.adjusted;
       const volumeLabel = current.volumeRatio >= 1.2 ? "放量" : current.volumeRatio <= 0.8 ? "缩量" : "平量";
       const flowClass = current.mainNet >= 0 ? "rise" : "fall";
       const macdClass = current.macdHistogram >= 0 ? "rise" : "fall";
-      card.innerHTML = `<div><span>次日上涨率 · 硬指标相似样本</span><strong>${probability.rate.toFixed(1)}%</strong></div><div class="probability-range"><span>95%区间 ${probability.low.toFixed(0)}%–${probability.high.toFixed(0)}%</span><em>${probability.wins}/${probability.count} 个样本收涨</em></div><div class="indicator-grid"><div><span>5日量比</span><strong>${current.volumeRatio.toFixed(2)}×</strong><em>${volumeLabel}</em></div><div><span>主力净流入</span><strong class="${flowClass}">${formatMoney(current.mainNet, true)}</strong><em>${current.mainRatio >= 0 ? "+" : ""}${current.mainRatio.toFixed(2)}% 成交额</em></div><div><span>MACD</span><strong class="${macdClass}">${macdLabel(current)}</strong><em>柱 ${current.macdHistogram >= 0 ? "+" : ""}${current.macdHistogram.toFixed(3)}</em></div><div><span>RSI6 / 5日动量</span><strong>${current.rsi6.toFixed(0)} / ${current.momentum5 >= 0 ? "+" : ""}${current.momentum5.toFixed(1)}%</strong><em>${current.date.slice(5)}</em></div></div><div class="next-day-grid"><div><span>样本次日开盘</span><strong class="${probability.averageOpen >= 0 ? "rise" : "fall"}">${probability.averageOpen >= 0 ? "+" : ""}${probability.averageOpen.toFixed(1)}%</strong></div><div><span>样本次日收盘</span><strong class="${probability.averageClose >= 0 ? "rise" : "fall"}">${probability.averageClose >= 0 ? "+" : ""}${probability.averageClose.toFixed(1)}%</strong></div><div><span>样本次日最高</span><strong class="rise">${probability.averageHigh >= 0 ? "+" : ""}${probability.averageHigh.toFixed(1)}%</strong></div><div><span>样本次日最低</span><strong class="${probability.averageLow >= 0 ? "rise" : "fall"}">${probability.averageLow >= 0 ? "+" : ""}${probability.averageLow.toFixed(1)}%</strong></div></div><p>从近 120 个含资金流数据的交易日中，按主力净流入 30%、成交量 22%、MACD 28%、RSI6 10%、5日动量 10% 筛选最相似的 ${probability.count} 天，再统计其下一交易日表现。它是历史条件频率，不是确定预测。</p>`;
+      const calibrationText = calibration.learned
+        ? `已用 ${calibration.sampleCount} 条同区间验证记录校准 ${calibration.delta >= 0 ? "+" : ""}${calibration.delta.toFixed(1)} 个百分点`
+        : `已积累 ${calibration.sampleCount} 条同区间记录，满 5 条后启动概率校准`;
+      card.innerHTML = `<div><span>次日上涨率 · 验证学习模型</span><strong>${displayedProbability.toFixed(1)}%</strong></div><div class="probability-range"><span>原始相似样本 ${probability.rate.toFixed(1)}% · 95%区间 ${probability.low.toFixed(0)}%–${probability.high.toFixed(0)}%</span><em>${probability.wins}/${probability.count} 个样本收涨</em></div><div class="learning-calibration ${calibration.learned ? "active" : ""}"><span>${calibration.learned ? "学习已生效" : "学习积累中"}</span><strong>${calibrationText}</strong></div><div class="indicator-grid"><div><span>5日量比</span><strong>${current.volumeRatio.toFixed(2)}×</strong><em>${volumeLabel}</em></div><div><span>主力净流入</span><strong class="${flowClass}">${formatMoney(current.mainNet, true)}</strong><em>${current.mainRatio >= 0 ? "+" : ""}${current.mainRatio.toFixed(2)}% 成交额</em></div><div><span>MACD</span><strong class="${macdClass}">${macdLabel(current)}</strong><em>柱 ${current.macdHistogram >= 0 ? "+" : ""}${current.macdHistogram.toFixed(3)}</em></div><div><span>RSI6 / 5日动量</span><strong>${current.rsi6.toFixed(0)} / ${current.momentum5 >= 0 ? "+" : ""}${current.momentum5.toFixed(1)}%</strong><em>${current.date.slice(5)}</em></div></div><div class="next-day-grid"><div><span>样本次日开盘</span><strong class="${probability.averageOpen >= 0 ? "rise" : "fall"}">${probability.averageOpen >= 0 ? "+" : ""}${probability.averageOpen.toFixed(1)}%</strong></div><div><span>样本次日收盘</span><strong class="${probability.averageClose >= 0 ? "rise" : "fall"}">${probability.averageClose >= 0 ? "+" : ""}${probability.averageClose.toFixed(1)}%</strong></div><div><span>样本次日最高</span><strong class="rise">${probability.averageHigh >= 0 ? "+" : ""}${probability.averageHigh.toFixed(1)}%</strong></div><div><span>样本次日最低</span><strong class="${probability.averageLow >= 0 ? "rise" : "fall"}">${probability.averageLow >= 0 ? "+" : ""}${probability.averageLow.toFixed(1)}%</strong></div></div><p>系统冻结本次预测，下一交易日按实际收盘涨跌验证；同概率区间至少积累 5 条记录后进行贝叶斯收缩校准。历史条件频率不代表确定结果。</p>`;
+      recordPrediction(stock, probability, calibration, data);
     } else {
       card.innerHTML = `<div><span>次日上涨率 · 硬指标样本</span><strong>样本不足</strong></div><p>${escapeHtml(probability.reason || "可比交易日不足")}，当前仅有 ${probability.count} 个可用样本，暂不显示百分比。</p>`;
     }
@@ -841,6 +974,7 @@ function bindEvents() {
     localStorage.setItem("zt-workbench-weights", JSON.stringify(state.weights));
     renderAll(); showToast("已恢复默认权重");
   });
+  $("#verifyPredictions").addEventListener("click", verifyAllPredictions);
   $("#installButton").addEventListener("click", () => openSheet($("#installSheet")));
   $("#stockSheetClose").addEventListener("click", closeSheets);
   $("#installSheetClose").addEventListener("click", closeSheets);
@@ -858,7 +992,10 @@ async function init() {
     bindEvents();
     $("#offlineBanner").hidden = navigator.onLine;
     if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("./sw.js").catch(() => {});
-    if (navigator.onLine) setTimeout(() => refreshLive({ silent: true }), 350);
+    if (navigator.onLine) {
+      setTimeout(() => refreshLive({ silent: true }), 350);
+      if (state.predictions.some((record) => !record.verified)) setTimeout(() => verifyAllPredictions({ silent: true }), 2200);
+    }
   } catch (error) {
     document.querySelector("main").innerHTML = `<div class="empty-state"><span>!</span><h3>数据载入失败</h3><p>${escapeHtml(error.message)}。请通过本地服务器或 HTTPS 地址打开。</p></div>`;
   }
