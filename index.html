@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <meta name="theme-color" content="#0f0f1a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="涨停工作台" />
+    <meta name="description" content="A股涨停强度七因子量化研究工作台" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icons/icon-180.png" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>涨停强度工作台</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">K</span>
+          <div>
+            <p class="eyebrow">KOMOREBI LAB</p>
+            <h1>涨停强度工作台</h1>
+          </div>
+        </div>
+        <button class="icon-button" id="shareButton" aria-label="分享工作台">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0-12 4 4m-4-4L8 7M5 13v6h14v-6" /></svg>
+        </button>
+      </header>
+
+      <div class="offline-banner" id="offlineBanner" hidden>当前离线，正在使用已缓存的最近交易日数据</div>
+
+      <main>
+        <section class="tab-panel active" data-panel="today">
+          <div class="hero">
+            <div class="hero-orb orb-one"></div>
+            <div class="hero-orb orb-two"></div>
+            <div class="hero-content">
+              <div class="date-row">
+                <span class="live-dot"></span>
+                <span id="tradeDate">数据载入中</span>
+                <span class="source-badge">收盘研究</span>
+              </div>
+              <p class="hero-kicker">七因子量化复盘</p>
+              <h2>今日强度，<br />下个交易日观察。</h2>
+              <p class="hero-copy">用实际收盘数据衡量连板、资金、热度与封板质量，不做结果承诺。</p>
+              <div class="hero-actions">
+                <button class="primary-button" data-jump="scores">查看评分榜</button>
+                <button class="ghost-button" id="refreshButton">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" /></svg>
+                  刷新行情
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <section class="section-block market-overview">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">MARKET PULSE</p>
+                <h2>市场概览</h2>
+              </div>
+              <span class="time-stamp" id="updatedAt">—</span>
+            </div>
+            <div class="index-strip" id="indexStrip"></div>
+            <div class="metric-grid" id="metricGrid"></div>
+          </section>
+
+          <section class="section-block sentiment-layout">
+            <article class="sentiment-card">
+              <div class="card-label">市场情绪</div>
+              <div class="ring-wrap">
+                <svg class="score-ring" viewBox="0 0 120 120" aria-hidden="true">
+                  <circle class="ring-track" cx="60" cy="60" r="48"></circle>
+                  <circle class="ring-value" id="sentimentRing" cx="60" cy="60" r="48"></circle>
+                </svg>
+                <div class="ring-center"><strong id="sentimentScore">—</strong><span>强度值</span></div>
+              </div>
+              <p id="sentimentText">正在计算市场情绪</p>
+            </article>
+            <article class="focus-card">
+              <div class="focus-icon">↗</div>
+              <div>
+                <span>封板成功率</span>
+                <strong id="sealRate">—</strong>
+                <p>涨停家数 ÷（涨停 + 炸板）</p>
+              </div>
+            </article>
+          </section>
+
+          <section class="section-block">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">HIGH CONVICTION</p>
+                <h2>高强度精选</h2>
+              </div>
+              <button class="text-button" data-jump="scores">查看全部</button>
+            </div>
+            <div class="stock-list" id="featuredStocks"></div>
+          </section>
+
+          <section class="section-block research-note">
+            <div class="note-icon">i</div>
+            <p><strong>研究口径</strong>：评分描述的是当日涨停结构强弱，用于复盘与观察，不代表次日上涨概率。</p>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="scores">
+          <div class="page-heading">
+            <p class="eyebrow">STRENGTH RANKING</p>
+            <h2>涨停强度评分</h2>
+            <p>对最近交易日全部涨停股进行七因子加权排序。</p>
+          </div>
+          <div class="sticky-tools">
+            <label class="search-box">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 4 4"></path></svg>
+              <input id="stockSearch" type="search" placeholder="搜索股票 / 代码 / 板块" autocomplete="off" />
+            </label>
+            <div class="filter-chips" id="scoreFilters">
+              <button class="chip active" data-score-filter="all">全部</button>
+              <button class="chip" data-score-filter="90">90+</button>
+              <button class="chip" data-score-filter="85">85–89</button>
+              <button class="chip" data-score-filter="80">80–84</button>
+              <button class="chip" data-score-filter="streak">连板</button>
+            </div>
+          </div>
+          <div class="rank-summary" id="rankSummary"></div>
+          <div class="stock-list full-list" id="allStocks"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="sectors">
+          <div class="page-heading">
+            <p class="eyebrow">HOT THEMES</p>
+            <h2>热点板块</h2>
+            <p>板块涨幅与涨停广度两条线交叉观察。</p>
+          </div>
+          <section class="section-block">
+            <div class="section-heading compact">
+              <h2>概念涨幅 TOP 10</h2>
+              <span class="unit-label">主力净流入</span>
+            </div>
+            <div class="sector-list" id="conceptList"></div>
+          </section>
+          <section class="section-block">
+            <div class="section-heading compact">
+              <h2>涨停广度 TOP 10</h2>
+              <span class="unit-label">涨停家数</span>
+            </div>
+            <div class="breadth-chart" id="breadthChart"></div>
+          </section>
+        </section>
+
+        <section class="tab-panel" data-panel="watchlist">
+          <div class="page-heading">
+            <p class="eyebrow">WATCHLIST</p>
+            <h2>我的观察</h2>
+            <p>收藏只保存在当前设备，不会上传。</p>
+          </div>
+          <div class="empty-state" id="watchlistEmpty">
+            <span>☆</span>
+            <h3>还没有观察标的</h3>
+            <p>在评分榜点击星标，即可加入这里。</p>
+            <button class="primary-button" data-jump="scores">去评分榜</button>
+          </div>
+          <div class="stock-list full-list" id="watchlistStocks"></div>
+        </section>
+
+        <section class="tab-panel" data-panel="settings">
+          <div class="page-heading">
+            <p class="eyebrow">MODEL CONTROL</p>
+            <h2>模型与设备</h2>
+            <p>权重会自动按比例归一化，总分始终为 100。</p>
+          </div>
+          <section class="section-block settings-card">
+            <div class="section-heading compact">
+              <h2>七因子权重</h2>
+              <button class="text-button" id="resetWeights">恢复默认</button>
+            </div>
+            <div id="weightControls"></div>
+          </section>
+          <section class="section-block install-card">
+            <div class="install-art"><span>K</span></div>
+            <div>
+              <p class="eyebrow">IPHONE APP</p>
+              <h2>添加到主屏幕</h2>
+              <p>从 Safari 的分享菜单选择“添加到主屏幕”，即可像 App 一样全屏打开。</p>
+              <button class="primary-button" id="installButton">查看安装步骤</button>
+            </div>
+          </section>
+          <section class="section-block detail-card">
+            <h2>计算口径</h2>
+            <ul>
+              <li>连板 25% · 龙虎榜净买入 25% · 概念/板块热度 20%</li>
+              <li>封单资金 15% · 换手率 10% · 封板时间 5% · 市场情绪 5%</li>
+              <li>缺少龙虎榜记录时使用中性分，不将“未上榜”解释为净流入或净流出。</li>
+            </ul>
+          </section>
+          <section class="section-block danger-note">
+            <strong>风险声明</strong>
+            <p>本工作台仅用于量化数据研究与复盘，不构成投资建议。数据可能存在延迟、缺失或供应方调整，请以交易所披露为准。</p>
+          </section>
+        </section>
+      </main>
+
+      <nav class="bottom-nav" aria-label="主导航">
+        <button class="nav-item active" data-tab="today"><span>⌂</span><em>今日</em></button>
+        <button class="nav-item" data-tab="scores"><span>◫</span><em>评分</em></button>
+        <button class="nav-item" data-tab="sectors"><span>⌁</span><em>热点</em></button>
+        <button class="nav-item" data-tab="watchlist"><span>☆</span><em>观察</em></button>
+        <button class="nav-item" data-tab="settings"><span>⚙</span><em>设置</em></button>
+      </nav>
+    </div>
+
+    <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+    <aside class="bottom-sheet" id="stockSheet" aria-hidden="true">
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" id="stockSheetClose" aria-label="关闭">×</button>
+      <div id="stockSheetContent"></div>
+    </aside>
+    <aside class="bottom-sheet install-sheet" id="installSheet" aria-hidden="true">
+      <div class="sheet-handle"></div>
+      <button class="sheet-close" id="installSheetClose" aria-label="关闭">×</button>
+      <p class="eyebrow">SAFARI · IPHONE</p>
+      <h2>三步装到主屏幕</h2>
+      <ol class="install-steps">
+        <li><span>1</span><div><strong>用 Safari 打开</strong><p>微信内打开时，点右上角并选择“在浏览器打开”。</p></div></li>
+        <li><span>2</span><div><strong>点击分享按钮</strong><p>它在 Safari 底部工具栏，是一个带向上箭头的方框。</p></div></li>
+        <li><span>3</span><div><strong>添加到主屏幕</strong><p>向下滑找到该选项，确认名称后点击“添加”。</p></div></li>
+      </ol>
+    </aside>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
