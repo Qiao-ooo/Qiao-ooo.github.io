@@ -204,6 +204,9 @@ input[type="range"]::-webkit-slider-thumb { width: 18px; height: 18px; appearanc
 .sheet-score { color: var(--gold); text-align: right; }
 .sheet-score strong { display: block; font-size: 37px; line-height: 1; letter-spacing: -.06em; }
 .sheet-score span { font-size: 10px; }
+.sheet-score.quote-score { flex: 0 0 96px; padding-right: 2px; }
+.sheet-score.quote-score strong { font-size: 27px; letter-spacing: -.035em; }
+.sheet-score.quote-score span { display: block; margin-top: 5px; }
 .evidence-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin: 20px 0; }
 .evidence { padding: 12px 8px; border-radius: 14px; background: rgba(255,255,255,.045); }
 .evidence span { display: block; color: var(--muted-2); font-size: 9px; }
@@ -250,6 +253,10 @@ input[type="range"]::-webkit-slider-thumb { width: 18px; height: 18px; appearanc
 .probability-card > p { margin: 11px 0 0; color: var(--muted-2); font-size: 8px; line-height: 1.5; }
 .probability-range { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; color: var(--muted); font-size: 8px; }
 .probability-range em { color: #bfc0cf; font-style: normal; }
+.indicator-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 11px; }
+.indicator-grid > div { min-width: 0; padding: 9px; border: 1px solid rgba(255,255,255,.045); border-radius: 10px; background: rgba(0,0,0,.17); }
+.indicator-grid span, .indicator-grid em { display: block; color: var(--muted-2); font-size: 8px; font-style: normal; }
+.indicator-grid strong { display: block; margin: 5px 0 3px; overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .next-day-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 11px; }
 .next-day-grid > div { padding: 8px 5px; border-radius: 9px; background: rgba(0,0,0,.15); }
 .probability-card.loading { opacity: .7; }
