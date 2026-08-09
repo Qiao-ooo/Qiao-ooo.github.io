@@ -340,7 +340,7 @@ function openStock(code) {
         <div class="kline-loading" id="klineChart"><span></span><p>正在载入近 260 个交易日走势</p></div>
         <div id="trendStats"></div>
         <div class="probability-card loading" id="nextDayProbability">
-          <span>次日上涨历史参考率</span><strong>计算中</strong><p>基于该股票历史同类涨停样本</p>
+          <span>次日上涨率 · 硬指标样本</span><strong>计算中</strong><p>正在计算成交量、主力净流入与 MACD 相似样本</p>
         </div>
       </section>
       <p class="sheet-disclaimer">自选股行情与历史统计仅用于短线复盘，不构成投资建议，也不代表下一交易日一定上涨。</p>`;
@@ -367,7 +367,7 @@ function openStock(code) {
       <div class="kline-loading" id="klineChart"><span></span><p>正在载入近 260 个交易日走势</p></div>
       <div id="trendStats"></div>
       <div class="probability-card loading" id="nextDayProbability">
-        <span>次日上涨历史参考率</span><strong>计算中</strong><p>基于该股票历史同类涨停样本</p>
+        <span>次日上涨率 · 硬指标样本</span><strong>计算中</strong><p>正在计算成交量、主力净流入与 MACD 相似样本</p>
       </div>
     </section>
     <div class="factor-list">${Object.entries(stock.factors).map(([key, value]) => `
@@ -393,42 +393,137 @@ function movingAverage(data, windowSize) {
   });
 }
 
-function probabilityFromHistory(stock, data) {
-  const threshold = /ST/i.test(stock.name) ? 4.8 : /^(30|68)/.test(stock.code) ? 19 : 9.5;
-  const samples = [];
-  for (let index = 0; index < data.length - 1; index += 1) {
-    if (data[index].changePercent >= threshold) {
-      const currentClose = data[index].close;
-      const next = data[index + 1];
-      samples.push({
-        up: next.close > currentClose,
-        openReturn: ((next.open / currentClose) - 1) * 100,
-        closeReturn: ((next.close / currentClose) - 1) * 100,
-        highReturn: ((next.high / currentClose) - 1) * 100,
-        lowReturn: ((next.low / currentClose) - 1) * 100,
-      });
-    }
+function parseMainFlows(response) {
+  return new Map((response?.data?.klines ?? []).map((row) => {
+    const [date, mainNet] = row.split(",");
+    return [date, Number(mainNet)];
+  }).filter(([, value]) => Number.isFinite(value)));
+}
+
+function emaSeries(values, period) {
+  const multiplier = 2 / (period + 1);
+  let previous = Number(values[0] || 0);
+  return values.map((raw, index) => {
+    const value = Number(raw || 0);
+    previous = index === 0 ? value : value * multiplier + previous * (1 - multiplier);
+    return previous;
+  });
+}
+
+function rsiAt(data, index, period = 6) {
+  if (index < period) return null;
+  let gains = 0;
+  let losses = 0;
+  for (let cursor = index - period + 1; cursor <= index; cursor += 1) {
+    const change = data[cursor].close - data[cursor - 1].close;
+    if (change >= 0) gains += change;
+    else losses -= change;
   }
-  const wins = samples.filter((sample) => sample.up).length;
-  const count = samples.length;
-  if (!count) return { count: 0, wins: 0, rate: null, low: null, high: null };
-  const average = (key) => samples.reduce((sum, sample) => sum + sample[key], 0) / count;
+  if (losses === 0) return 100;
+  const relativeStrength = gains / losses;
+  return 100 - 100 / (1 + relativeStrength);
+}
+
+function wilsonInterval(wins, count) {
+  if (!count) return { low: null, high: null };
   const rate = wins / count;
   const z = 1.96;
   const denominator = 1 + (z * z) / count;
   const center = (rate + (z * z) / (2 * count)) / denominator;
   const margin = (z * Math.sqrt((rate * (1 - rate) + (z * z) / (4 * count)) / count)) / denominator;
+  return { low: clamp((center - margin) * 100), high: clamp((center + margin) * 100) };
+}
+
+function indicatorProbabilityFromHistory(data, flowByDate) {
+  if (flowByDate.size < 30 || data.length < 35) return { count: 0, reason: "主力资金历史数据不足" };
+  const closes = data.map((item) => item.close);
+  const ema12 = emaSeries(closes, 12);
+  const ema26 = emaSeries(closes, 26);
+  const dif = closes.map((_, index) => ema12[index] - ema26[index]);
+  const dea = emaSeries(dif, 9);
+  const histogram = dif.map((value, index) => (value - dea[index]) * 2);
+  const rows = [];
+
+  for (let index = 26; index < data.length; index += 1) {
+    const item = data[index];
+    const mainNet = flowByDate.get(item.date);
+    const priorVolumes = data.slice(index - 5, index).map((row) => row.volume).filter(Number.isFinite);
+    const averageVolume = priorVolumes.reduce((sum, value) => sum + value, 0) / priorVolumes.length;
+    const rsi6 = rsiAt(data, index, 6);
+    if (!Number.isFinite(mainNet) || !averageVolume || !Number.isFinite(rsi6) || !item.amount) continue;
+    rows.push({
+      index,
+      date: item.date,
+      volumeRatio: item.volume / averageVolume,
+      mainNet,
+      mainRatio: clamp((mainNet / item.amount) * 100, -50, 50),
+      macdHistogram: histogram[index],
+      macdHistogramPercent: (histogram[index] / item.close) * 100,
+      macdSlopePercent: ((histogram[index] - histogram[index - 1]) / item.close) * 100,
+      rsi6,
+      momentum5: ((item.close / data[index - 5].close) - 1) * 100,
+    });
+  }
+
+  const current = rows.at(-1);
+  const candidates = rows.filter((row) => row.index < data.length - 1 && row.date !== current?.date);
+  if (!current || candidates.length < 12) return { count: candidates.length, current, reason: "可比交易日不足" };
+
+  const featureWeights = {
+    volumeRatio: 0.22,
+    mainRatio: 0.30,
+    macdHistogramPercent: 0.18,
+    macdSlopePercent: 0.10,
+    rsi6: 0.10,
+    momentum5: 0.10,
+  };
+  const scales = Object.keys(featureWeights).reduce((result, key) => {
+    const values = candidates.map((row) => row[key]);
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / values.length;
+    result[key] = Math.max(Math.sqrt(variance), key === "rsi6" ? 8 : 0.01);
+    return result;
+  }, {});
+  const withDistance = candidates.map((row) => {
+    let distance = Object.entries(featureWeights).reduce((sum, [key, weight]) => sum + (Math.abs(row[key] - current[key]) / scales[key]) * weight, 0);
+    if (Math.sign(row.mainRatio) !== Math.sign(current.mainRatio)) distance += 0.22;
+    if (Math.sign(row.macdHistogramPercent) !== Math.sign(current.macdHistogramPercent)) distance += 0.16;
+    return { ...row, distance };
+  }).sort((a, b) => a.distance - b.distance);
+  const similar = withDistance.slice(0, Math.min(20, withDistance.length));
+  const samples = similar.map((row) => {
+    const base = data[row.index].close;
+    const next = data[row.index + 1];
+    return {
+      up: next.close > base,
+      openReturn: ((next.open / base) - 1) * 100,
+      closeReturn: ((next.close / base) - 1) * 100,
+      highReturn: ((next.high / base) - 1) * 100,
+      lowReturn: ((next.low / base) - 1) * 100,
+    };
+  });
+  const count = samples.length;
+  const wins = samples.filter((sample) => sample.up).length;
+  const average = (key) => samples.reduce((sum, sample) => sum + sample[key], 0) / count;
+  const interval = wilsonInterval(wins, count);
   return {
     count,
     wins,
-    rate: rate * 100,
-    low: clamp((center - margin) * 100),
-    high: clamp((center + margin) * 100),
+    rate: (wins / count) * 100,
+    ...interval,
+    current,
     averageOpen: average("openReturn"),
     averageClose: average("closeReturn"),
     averageHigh: average("highReturn"),
     averageLow: average("lowReturn"),
   };
+}
+
+function macdLabel(current) {
+  if (current.macdHistogram >= 0 && current.macdSlopePercent >= 0) return "多头增强";
+  if (current.macdHistogram >= 0) return "多头减弱";
+  if (current.macdSlopePercent >= 0) return "空头收敛";
+  return "空头增强";
 }
 
 function renderKlineChart(data) {
@@ -477,9 +572,13 @@ async function loadStockTrend(stock) {
   const sheet = $("#stockSheet");
   const secid = `${stock.market}.${stock.code}`;
   try {
-    const response = await jsonp(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=101&fqt=1&lmt=260&end=20500101&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61`, 16000);
+    const [klineResult, flowResult] = await Promise.allSettled([
+      jsonp(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=101&fqt=1&lmt=260&end=20500101&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61`, 16000),
+      jsonp(`https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get?lmt=360&klt=101&secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55`, 16000),
+    ]);
+    if (klineResult.status !== "fulfilled") throw klineResult.reason;
     if (sheet.dataset.stockCode !== stock.code) return;
-    const data = parseKlines(response);
+    const data = parseKlines(klineResult.value);
     if (data.length < 20) throw new Error("历史行情样本不足");
     $("#klineChart").className = "kline-chart";
     $("#klineChart").innerHTML = renderKlineChart(data);
@@ -489,20 +588,28 @@ async function loadStockTrend(stock) {
     const return20 = ((latest.close / twentyAgo.close) - 1) * 100;
     const return60 = ((latest.close / sixtyAgo.close) - 1) * 100;
     $("#trendStats").innerHTML = `<div class="trend-stats"><div><span>最新收盘</span><strong>¥${latest.close.toFixed(2)}</strong></div><div><span>20日走势</span><strong class="${return20 >= 0 ? "rise" : "fall"}">${return20 >= 0 ? "+" : ""}${return20.toFixed(1)}%</strong></div><div><span>60日走势</span><strong class="${return60 >= 0 ? "rise" : "fall"}">${return60 >= 0 ? "+" : ""}${return60.toFixed(1)}%</strong></div></div>`;
-    const probability = probabilityFromHistory(stock, data);
     const card = $("#nextDayProbability");
     card.classList.remove("loading");
-    if (probability.count >= 5) {
-      card.innerHTML = `<div><span>次日上涨历史参考率</span><strong>${probability.rate.toFixed(1)}%</strong></div><div class="probability-range"><span>95%区间 ${probability.low.toFixed(0)}%–${probability.high.toFixed(0)}%</span><em>${probability.wins}/${probability.count} 次收涨</em></div><div class="next-day-grid"><div><span>平均开盘</span><strong class="${probability.averageOpen >= 0 ? "rise" : "fall"}">${probability.averageOpen >= 0 ? "+" : ""}${probability.averageOpen.toFixed(1)}%</strong></div><div><span>平均收盘</span><strong class="${probability.averageClose >= 0 ? "rise" : "fall"}">${probability.averageClose >= 0 ? "+" : ""}${probability.averageClose.toFixed(1)}%</strong></div><div><span>平均最高</span><strong class="rise">${probability.averageHigh >= 0 ? "+" : ""}${probability.averageHigh.toFixed(1)}%</strong></div><div><span>平均最低</span><strong class="${probability.averageLow >= 0 ? "rise" : "fall"}">${probability.averageLow >= 0 ? "+" : ""}${probability.averageLow.toFixed(1)}%</strong></div></div><p>统计过去约 260 个交易日中，该股出现同类涨停后下一交易日的表现；不是对明日的确定预测。</p>`;
+    if (flowResult.status !== "fulfilled") {
+      card.innerHTML = `<div><span>次日上涨率 · 硬指标样本</span><strong>资金流暂缺</strong></div><p>K 线已载入，但主力净流入数据暂时不可用，因此不输出缺少关键指标的概率。</p>`;
+      return;
+    }
+    const probability = indicatorProbabilityFromHistory(data, parseMainFlows(flowResult.value));
+    if (probability.count >= 12 && probability.current) {
+      const current = probability.current;
+      const volumeLabel = current.volumeRatio >= 1.2 ? "放量" : current.volumeRatio <= 0.8 ? "缩量" : "平量";
+      const flowClass = current.mainNet >= 0 ? "rise" : "fall";
+      const macdClass = current.macdHistogram >= 0 ? "rise" : "fall";
+      card.innerHTML = `<div><span>次日上涨率 · 硬指标相似样本</span><strong>${probability.rate.toFixed(1)}%</strong></div><div class="probability-range"><span>95%区间 ${probability.low.toFixed(0)}%–${probability.high.toFixed(0)}%</span><em>${probability.wins}/${probability.count} 个样本收涨</em></div><div class="indicator-grid"><div><span>5日量比</span><strong>${current.volumeRatio.toFixed(2)}×</strong><em>${volumeLabel}</em></div><div><span>主力净流入</span><strong class="${flowClass}">${formatMoney(current.mainNet, true)}</strong><em>${current.mainRatio >= 0 ? "+" : ""}${current.mainRatio.toFixed(2)}% 成交额</em></div><div><span>MACD</span><strong class="${macdClass}">${macdLabel(current)}</strong><em>柱 ${current.macdHistogram >= 0 ? "+" : ""}${current.macdHistogram.toFixed(3)}</em></div><div><span>RSI6 / 5日动量</span><strong>${current.rsi6.toFixed(0)} / ${current.momentum5 >= 0 ? "+" : ""}${current.momentum5.toFixed(1)}%</strong><em>${current.date.slice(5)}</em></div></div><div class="next-day-grid"><div><span>样本次日开盘</span><strong class="${probability.averageOpen >= 0 ? "rise" : "fall"}">${probability.averageOpen >= 0 ? "+" : ""}${probability.averageOpen.toFixed(1)}%</strong></div><div><span>样本次日收盘</span><strong class="${probability.averageClose >= 0 ? "rise" : "fall"}">${probability.averageClose >= 0 ? "+" : ""}${probability.averageClose.toFixed(1)}%</strong></div><div><span>样本次日最高</span><strong class="rise">${probability.averageHigh >= 0 ? "+" : ""}${probability.averageHigh.toFixed(1)}%</strong></div><div><span>样本次日最低</span><strong class="${probability.averageLow >= 0 ? "rise" : "fall"}">${probability.averageLow >= 0 ? "+" : ""}${probability.averageLow.toFixed(1)}%</strong></div></div><p>从近 120 个含资金流数据的交易日中，按主力净流入 30%、成交量 22%、MACD 28%、RSI6 10%、5日动量 10% 筛选最相似的 ${probability.count} 天，再统计其下一交易日表现。它是历史条件频率，不是确定预测。</p>`;
     } else {
-      card.innerHTML = `<div><span>次日上涨历史参考率</span><strong>样本不足</strong></div><p>近 260 个交易日仅找到 ${probability.count} 次同类涨停，无法给出有意义的百分比。</p>`;
+      card.innerHTML = `<div><span>次日上涨率 · 硬指标样本</span><strong>样本不足</strong></div><p>${escapeHtml(probability.reason || "可比交易日不足")}，当前仅有 ${probability.count} 个可用样本，暂不显示百分比。</p>`;
     }
   } catch (error) {
     if (sheet.dataset.stockCode !== stock.code) return;
     $("#klineChart").className = "kline-error";
     $("#klineChart").innerHTML = `<strong>K 线暂时无法载入</strong><p>${escapeHtml(error.message)}，请稍后重试。</p>`;
     $("#nextDayProbability").classList.remove("loading");
-    $("#nextDayProbability").innerHTML = `<div><span>次日上涨历史参考率</span><strong>暂无数据</strong></div><p>未取得足够的历史行情，因此不显示推测值。</p>`;
+    $("#nextDayProbability").innerHTML = `<div><span>次日上涨率 · 硬指标样本</span><strong>暂无数据</strong></div><p>未取得足够的行情与资金流数据，因此不显示推测值。</p>`;
   }
 }
 
