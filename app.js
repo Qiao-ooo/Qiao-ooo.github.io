@@ -201,6 +201,7 @@ function renderAll() {
 function openStock(code) {
   const stock = state.scored.find((item) => item.code === code);
   if (!stock) return;
+  $("#stockSheet").dataset.stockCode = stock.code;
   const netBuy = stock.billboard ? formatMoney(stock.billboard.netBuy, true) : "未上榜";
   $("#stockSheetContent").innerHTML = `
     <div class="sheet-stock-head">
@@ -215,10 +216,150 @@ function openStock(code) {
       <div class="evidence"><span>炸板次数</span><strong>${stock.brokenCount}</strong></div>
       <div class="evidence"><span>近 ${stock.limitStats?.days ?? 1} 日涨停</span><strong>${stock.limitStats?.ct ?? 1} 次</strong></div>
     </div>
+    <section class="trend-card">
+      <div class="trend-heading">
+        <div><span>PRICE ACTION</span><h3>个股走势 · 日K</h3></div>
+        <span class="trend-source">联网行情</span>
+      </div>
+      <div class="kline-loading" id="klineChart"><span></span><p>正在载入近 260 个交易日走势</p></div>
+      <div id="trendStats"></div>
+      <div class="probability-card loading" id="nextDayProbability">
+        <span>次日上涨历史参考率</span><strong>计算中</strong><p>基于该股票历史同类涨停样本</p>
+      </div>
+    </section>
     <div class="factor-list">${Object.entries(stock.factors).map(([key, value]) => `
       <div class="factor-row"><label>${FACTOR_LABELS[key]}</label><div class="bar-track"><div class="bar-fill" style="width:${value}%"></div></div><strong>${Math.round(value)}</strong></div>`).join("")}</div>
     <p class="sheet-disclaimer">强度值依据当日收盘后的七类数据计算，仅用于横向比较涨停结构，不表达次日方向或收益承诺。</p>`;
   openSheet($("#stockSheet"));
+  loadStockTrend(stock);
+}
+
+function parseKlines(response) {
+  return (response?.data?.klines ?? []).map((row) => {
+    const [date, open, close, high, low, volume, amount, amplitude, changePercent, change, turnover] = row.split(",");
+    return { date, open: Number(open), close: Number(close), high: Number(high), low: Number(low), volume: Number(volume), amount: Number(amount), amplitude: Number(amplitude), changePercent: Number(changePercent), change: Number(change), turnover: Number(turnover) };
+  }).filter((item) => Number.isFinite(item.close) && Number.isFinite(item.open));
+}
+
+function movingAverage(data, windowSize) {
+  return data.map((_, index) => {
+    if (index < windowSize - 1) return null;
+    const values = data.slice(index - windowSize + 1, index + 1);
+    return values.reduce((sum, item) => sum + item.close, 0) / windowSize;
+  });
+}
+
+function probabilityFromHistory(stock, data) {
+  const threshold = /ST/i.test(stock.name) ? 4.8 : /^(30|68)/.test(stock.code) ? 19 : 9.5;
+  const samples = [];
+  for (let index = 0; index < data.length - 1; index += 1) {
+    if (data[index].changePercent >= threshold) {
+      const currentClose = data[index].close;
+      const next = data[index + 1];
+      samples.push({
+        up: next.close > currentClose,
+        openReturn: ((next.open / currentClose) - 1) * 100,
+        closeReturn: ((next.close / currentClose) - 1) * 100,
+        highReturn: ((next.high / currentClose) - 1) * 100,
+        lowReturn: ((next.low / currentClose) - 1) * 100,
+      });
+    }
+  }
+  const wins = samples.filter((sample) => sample.up).length;
+  const count = samples.length;
+  if (!count) return { count: 0, wins: 0, rate: null, low: null, high: null };
+  const average = (key) => samples.reduce((sum, sample) => sum + sample[key], 0) / count;
+  const rate = wins / count;
+  const z = 1.96;
+  const denominator = 1 + (z * z) / count;
+  const center = (rate + (z * z) / (2 * count)) / denominator;
+  const margin = (z * Math.sqrt((rate * (1 - rate) + (z * z) / (4 * count)) / count)) / denominator;
+  return {
+    count,
+    wins,
+    rate: rate * 100,
+    low: clamp((center - margin) * 100),
+    high: clamp((center + margin) * 100),
+    averageOpen: average("openReturn"),
+    averageClose: average("closeReturn"),
+    averageHigh: average("highReturn"),
+    averageLow: average("lowReturn"),
+  };
+}
+
+function renderKlineChart(data) {
+  const candles = data.slice(-60);
+  const width = 360;
+  const height = 220;
+  const priceTop = 16;
+  const priceBottom = 164;
+  const volumeTop = 176;
+  const volumeBottom = 208;
+  const minPrice = Math.min(...candles.map((item) => item.low));
+  const maxPrice = Math.max(...candles.map((item) => item.high));
+  const priceRange = maxPrice - minPrice || 1;
+  const maxVolume = Math.max(...candles.map((item) => item.volume)) || 1;
+  const step = width / candles.length;
+  const candleWidth = Math.max(2, Math.min(4.4, step * 0.62));
+  const yPrice = (value) => priceTop + ((maxPrice - value) / priceRange) * (priceBottom - priceTop);
+  const xAt = (index) => step * index + step / 2;
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const y = priceTop + ratio * (priceBottom - priceTop);
+    const label = (maxPrice - ratio * priceRange).toFixed(2);
+    return `<line x1="0" y1="${y}" x2="360" y2="${y}" class="chart-grid"/><text x="3" y="${y - 3}" class="chart-axis">${label}</text>`;
+  }).join("");
+  const candleSvg = candles.map((item, index) => {
+    const x = xAt(index);
+    const up = item.close >= item.open;
+    const colorClass = up ? "candle-up" : "candle-down";
+    const openY = yPrice(item.open);
+    const closeY = yPrice(item.close);
+    const bodyY = Math.min(openY, closeY);
+    const bodyHeight = Math.max(1.2, Math.abs(openY - closeY));
+    const volumeHeight = (item.volume / maxVolume) * (volumeBottom - volumeTop);
+    return `<g class="${colorClass}"><line x1="${x}" y1="${yPrice(item.high)}" x2="${x}" y2="${yPrice(item.low)}"/><rect x="${x - candleWidth / 2}" y="${bodyY}" width="${candleWidth}" height="${bodyHeight}"/><rect class="volume-bar" x="${x - candleWidth / 2}" y="${volumeBottom - volumeHeight}" width="${candleWidth}" height="${volumeHeight}"/></g>`;
+  }).join("");
+  const maLines = [[5, "ma-five"], [10, "ma-ten"], [20, "ma-twenty"]].map(([windowSize, className]) => {
+    const values = movingAverage(candles, windowSize);
+    const points = values.map((value, index) => value == null ? null : `${xAt(index)},${yPrice(value)}`).filter(Boolean).join(" ");
+    return `<polyline class="ma-line ${className}" points="${points}"/>`;
+  }).join("");
+  const firstDate = candles[0]?.date.slice(5) ?? "";
+  const lastDate = candles.at(-1)?.date.slice(5) ?? "";
+  return `<div class="kline-legend"><span class="ma5">MA5</span><span class="ma10">MA10</span><span class="ma20">MA20</span><em>红涨 · 绿跌</em></div><svg class="kline-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="最近60个交易日日K线">${grid}${candleSvg}${maLines}<text x="3" y="219" class="chart-axis">${firstDate}</text><text x="357" y="219" text-anchor="end" class="chart-axis">${lastDate}</text></svg>`;
+}
+
+async function loadStockTrend(stock) {
+  const sheet = $("#stockSheet");
+  const secid = `${stock.market}.${stock.code}`;
+  try {
+    const response = await jsonp(`https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&klt=101&fqt=1&lmt=260&end=20500101&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61`, 16000);
+    if (sheet.dataset.stockCode !== stock.code) return;
+    const data = parseKlines(response);
+    if (data.length < 20) throw new Error("历史行情样本不足");
+    $("#klineChart").className = "kline-chart";
+    $("#klineChart").innerHTML = renderKlineChart(data);
+    const latest = data.at(-1);
+    const twentyAgo = data.at(-21) ?? data[0];
+    const sixtyAgo = data.at(-61) ?? data[0];
+    const return20 = ((latest.close / twentyAgo.close) - 1) * 100;
+    const return60 = ((latest.close / sixtyAgo.close) - 1) * 100;
+    $("#trendStats").innerHTML = `<div class="trend-stats"><div><span>最新收盘</span><strong>¥${latest.close.toFixed(2)}</strong></div><div><span>20日走势</span><strong class="${return20 >= 0 ? "rise" : "fall"}">${return20 >= 0 ? "+" : ""}${return20.toFixed(1)}%</strong></div><div><span>60日走势</span><strong class="${return60 >= 0 ? "rise" : "fall"}">${return60 >= 0 ? "+" : ""}${return60.toFixed(1)}%</strong></div></div>`;
+    const probability = probabilityFromHistory(stock, data);
+    const card = $("#nextDayProbability");
+    card.classList.remove("loading");
+    if (probability.count >= 5) {
+      card.innerHTML = `<div><span>次日上涨历史参考率</span><strong>${probability.rate.toFixed(1)}%</strong></div><div class="probability-range"><span>95%区间 ${probability.low.toFixed(0)}%–${probability.high.toFixed(0)}%</span><em>${probability.wins}/${probability.count} 次收涨</em></div><div class="next-day-grid"><div><span>平均开盘</span><strong class="${probability.averageOpen >= 0 ? "rise" : "fall"}">${probability.averageOpen >= 0 ? "+" : ""}${probability.averageOpen.toFixed(1)}%</strong></div><div><span>平均收盘</span><strong class="${probability.averageClose >= 0 ? "rise" : "fall"}">${probability.averageClose >= 0 ? "+" : ""}${probability.averageClose.toFixed(1)}%</strong></div><div><span>平均最高</span><strong class="rise">${probability.averageHigh >= 0 ? "+" : ""}${probability.averageHigh.toFixed(1)}%</strong></div><div><span>平均最低</span><strong class="${probability.averageLow >= 0 ? "rise" : "fall"}">${probability.averageLow >= 0 ? "+" : ""}${probability.averageLow.toFixed(1)}%</strong></div></div><p>统计过去约 260 个交易日中，该股出现同类涨停后下一交易日的表现；不是对明日的确定预测。</p>`;
+    } else {
+      card.innerHTML = `<div><span>次日上涨历史参考率</span><strong>样本不足</strong></div><p>近 260 个交易日仅找到 ${probability.count} 次同类涨停，无法给出有意义的百分比。</p>`;
+    }
+  } catch (error) {
+    if (sheet.dataset.stockCode !== stock.code) return;
+    $("#klineChart").className = "kline-error";
+    $("#klineChart").innerHTML = `<strong>K 线暂时无法载入</strong><p>${escapeHtml(error.message)}，请稍后重试。</p>`;
+    $("#nextDayProbability").classList.remove("loading");
+    $("#nextDayProbability").innerHTML = `<div><span>次日上涨历史参考率</span><strong>暂无数据</strong></div><p>未取得足够的历史行情，因此不显示推测值。</p>`;
+  }
 }
 
 function openSheet(sheet) {
