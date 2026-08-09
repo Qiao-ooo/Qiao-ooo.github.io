@@ -154,14 +154,23 @@
         <section class="tab-panel" data-panel="watchlist">
           <div class="page-heading">
             <p class="eyebrow">WATCHLIST</p>
-            <h2>我的观察</h2>
-            <p>收藏只保存在当前设备，不会上传。</p>
+            <h2>我的自选</h2>
+            <p>输入股票代码或名称添加自选，数据只保存在当前设备。</p>
           </div>
+          <section class="watchlist-add-card">
+            <label class="search-box">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 4 4"></path></svg>
+              <input id="watchlistSearch" type="search" placeholder="输入代码或名称，如 600519 / 贵州茅台" autocomplete="off" />
+            </label>
+            <p class="watchlist-search-hint" id="watchlistSearchHint">支持沪深京 A 股，联网搜索后点“＋”添加</p>
+            <div class="watchlist-search-results" id="watchlistSearchResults"></div>
+          </section>
+          <div class="watchlist-summary" id="watchlistSummary">共 0 只自选</div>
           <div class="empty-state" id="watchlistEmpty">
             <span>☆</span>
-            <h3>还没有观察标的</h3>
-            <p>在评分榜点击星标，即可加入这里。</p>
-            <button class="primary-button" data-jump="scores">去评分榜</button>
+            <h3>还没有自选股票</h3>
+            <p>在上方搜索添加，或在评分榜点击星标。</p>
+            <button class="primary-button" data-jump="scores">去评分榜选股</button>
           </div>
           <div class="stock-list full-list" id="watchlistStocks"></div>
         </section>
@@ -207,7 +216,7 @@
         <button class="nav-item active" data-tab="today"><span>⌂</span><em>今日</em></button>
         <button class="nav-item" data-tab="scores"><span>◫</span><em>评分</em></button>
         <button class="nav-item" data-tab="sectors"><span>⌁</span><em>热点</em></button>
-        <button class="nav-item" data-tab="watchlist"><span>☆</span><em>观察</em></button>
+        <button class="nav-item" data-tab="watchlist"><span>☆</span><em>自选</em></button>
         <button class="nav-item" data-tab="settings"><span>⚙</span><em>设置</em></button>
       </nav>
     </div>
